@@ -1,0 +1,4 @@
+name: DreamTPA
+version: '${version}'
+main: com.liuchangking.dreamtpa.DreamTPA
+api-version: 1.18
