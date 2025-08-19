@@ -5,11 +5,14 @@ import com.liuchangking.dreamtpa.command.TpAcceptCommand;
 import com.liuchangking.dreamtpa.command.TpDenyCommand;
 import com.liuchangking.dreamtpa.listener.RequestListener;
 import com.liuchangking.dreamtpa.request.TeleportRequest;
+import com.google.common.io.ByteArrayDataOutput;
+import com.google.common.io.ByteStreams;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.UUID;
 
 import org.bukkit.Bukkit;
+import org.bukkit.entity.Player;
 import org.bukkit.plugin.java.JavaPlugin;
 
 /**
@@ -25,6 +28,7 @@ public final class DreamTPA extends JavaPlugin {
     public void onEnable() {
         saveDefaultConfig();
         this.expireSeconds = getConfig().getInt("request-expire-seconds", 120);
+        Bukkit.getMessenger().registerOutgoingPluginChannel(this, "BungeeCord");
 
         TpaCommand tpaCommand = new TpaCommand(this);
         getCommand("dreamtpa").setExecutor(tpaCommand);
@@ -60,5 +64,13 @@ public final class DreamTPA extends JavaPlugin {
     public void removeRequest(TeleportRequest request) {
         requestsByRequester.remove(request.getRequester().getUniqueId());
         requestsByTarget.remove(request.getTargetName().toLowerCase());
+    }
+
+    public void sendMessageCrossServer(Player from, String target, String message) {
+        ByteArrayDataOutput out = ByteStreams.newDataOutput();
+        out.writeUTF("Message");
+        out.writeUTF(target);
+        out.writeUTF(message);
+        from.sendPluginMessage(this, "BungeeCord", out.toByteArray());
     }
 }

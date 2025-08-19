@@ -34,6 +34,9 @@ public class RequestListener implements Listener {
             Player target = Bukkit.getPlayerExact(request.getTargetName());
             if (target != null) {
                 target.sendMessage(player.getName() + " 取消了传送请求");
+            } else {
+                plugin.sendMessageCrossServer(player, request.getTargetName(),
+                    player.getName() + " 取消了传送请求");
             }
         }
     }
