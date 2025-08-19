@@ -44,16 +44,27 @@ public class TpaCommand implements CommandExecutor, TabCompleter {
             player.sendMessage("该玩家不在线");
             return true;
         }
-        if (plugin.getRequestByRequester(player.getUniqueId()) != null) {
-            player.sendMessage("你已有未完成的传送请求");
-            return true;
+        TeleportRequest previous = plugin.getRequestByRequester(player.getUniqueId());
+        if (previous != null) {
+            plugin.removeRequest(previous);
+            player.sendMessage("已自动取消之前对 " + previous.getTargetName() + " 的传送请求");
+            Player oldTarget = Bukkit.getPlayerExact(previous.getTargetName());
+            if (oldTarget != null) {
+                oldTarget.sendMessage(player.getName() + " 取消了传送请求");
+            } else {
+                plugin.sendMessageCrossServer(player, previous.getTargetName(),
+                    player.getName() + " 取消了传送请求");
+            }
         }
         TeleportRequest request = new TeleportRequest(player, targetName);
         plugin.addRequest(request);
         player.sendMessage("已向 " + targetName + " 发送传送请求, 请在" + plugin.getExpireSeconds() + "秒内保持不动");
-        Player targetPlayer = Bukkit.getPlayerExact(targetName);
+        final Player targetPlayer = Bukkit.getPlayerExact(targetName);
         if (targetPlayer != null) {
             targetPlayer.sendMessage(player.getName() + " 请求传送到你这里, 输入 /tpaccept 同意或 /tpdeny 拒绝");
+        } else {
+            plugin.sendMessageCrossServer(player, targetName,
+                player.getName() + " 请求传送到你这里, 输入 /tpaccept 同意或 /tpdeny 拒绝");
         }
         Bukkit.getScheduler().runTaskLater(plugin, () -> {
             if (plugin.getRequestByTarget(targetName) == request) {
@@ -61,6 +72,9 @@ public class TpaCommand implements CommandExecutor, TabCompleter {
                 player.sendMessage("传送请求已过期");
                 if (targetPlayer != null && targetPlayer.isOnline()) {
                     targetPlayer.sendMessage("来自 " + player.getName() + " 的传送请求已过期");
+                } else {
+                    plugin.sendMessageCrossServer(player, targetName,
+                        "来自 " + player.getName() + " 的传送请求已过期");
                 }
             }
         }, plugin.getExpireSeconds() * 20L);
