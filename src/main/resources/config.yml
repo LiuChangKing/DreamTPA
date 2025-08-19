@@ -1,0 +1,2 @@
+# 传送请求的有效时间(秒)
+request-expire-seconds: 120

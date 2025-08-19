@@ -3,3 +3,11 @@ version: '${version}'
 main: com.liuchangking.dreamtpa.DreamTPA
 depend: [DreamEngine]
 api-version: 1.18
+commands:
+  dreamtpa:
+    description: 发送传送请求
+    aliases: [tpa]
+  tpaccept:
+    description: 同意传送请求
+  tpdeny:
+    description: 拒绝传送请求
