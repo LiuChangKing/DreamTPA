@@ -58,6 +58,7 @@ public class TpaCommand implements CommandExecutor, TabCompleter {
         }
         TeleportRequest request = new TeleportRequest(player, targetName);
         plugin.addRequest(request);
+        plugin.notifyRequestAdd(targetName, player.getName());
         player.sendMessage("已向 " + targetName + " 发送传送请求, 请在" + plugin.getExpireSeconds() + "秒内保持不动");
         final Player targetPlayer = Bukkit.getPlayerExact(targetName);
         if (targetPlayer != null) {

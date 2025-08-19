@@ -2,7 +2,6 @@ package com.liuchangking.dreamtpa.command;
 
 import com.liuchangking.dreamtpa.DreamTPA;
 import com.liuchangking.dreamtpa.request.TeleportRequest;
-import com.liuchangking.dreamengine.api.DreamServerAPI;
 import java.util.Collections;
 import java.util.List;
 import java.util.stream.Collectors;
@@ -35,24 +34,28 @@ public class TpAcceptCommand implements CommandExecutor, TabCompleter {
             String requesterName = args[0];
             request = plugin.getRequestByTarget(target.getName(), requesterName);
             if (request == null) {
+                plugin.removeRemoteRequest(target.getName(), requesterName);
+                plugin.addPendingTeleport(requesterName, target.getLocation());
                 plugin.forwardCommand(target, "TpAccept", requesterName);
                 return true;
             }
         } else {
             request = plugin.getRequestByTarget(target.getName());
             if (request == null) {
-                plugin.forwardCommand(target, "TpAccept");
+                List<String> requesters = plugin.getRequesters(target.getName());
+                if (!requesters.isEmpty()) {
+                    String requesterName = requesters.get(requesters.size() - 1);
+                    plugin.removeRemoteRequest(target.getName(), requesterName);
+                    plugin.addPendingTeleport(requesterName, target.getLocation());
+                    plugin.forwardCommand(target, "TpAccept", requesterName);
+                } else {
+                    plugin.forwardCommand(target, "TpAccept");
+                }
                 return true;
             }
         }
         plugin.removeRequest(request);
-        String targetServerId = DreamServerAPI.getPlayerServerId(target.getName());
-        String requesterServerId = DreamServerAPI.getPlayerServerId(request.getRequester().getName());
-        if (targetServerId != null && targetServerId.equalsIgnoreCase(requesterServerId)) {
-            request.getRequester().teleport(target);
-        } else {
-            DreamServerAPI.sendPlayerToServer(request.getRequester(), targetServerId);
-        }
+        request.getRequester().teleport(target);
         request.getRequester().sendMessage("正在传送到 " + target.getName());
         target.sendMessage("你接受了 " + request.getRequester().getName() + " 的传送请求");
         return true;
