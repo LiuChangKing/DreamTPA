@@ -32,8 +32,13 @@ public class TpAcceptCommand implements CommandExecutor {
             return true;
         }
         plugin.removeRequest(request);
-        String serverId = DreamServerAPI.getPlayerServerId(target.getName());
-        DreamServerAPI.sendPlayerToServer(request.getRequester(), serverId);
+        String targetServerId = DreamServerAPI.getPlayerServerId(target.getName());
+        String requesterServerId = DreamServerAPI.getPlayerServerId(request.getRequester().getName());
+        if (targetServerId != null && targetServerId.equalsIgnoreCase(requesterServerId)) {
+            request.getRequester().teleport(target);
+        } else {
+            DreamServerAPI.sendPlayerToServer(request.getRequester(), targetServerId);
+        }
         request.getRequester().sendMessage("正在传送到 " + target.getName());
         target.sendMessage("你接受了 " + request.getRequester().getName() + " 的传送请求");
         return true;
