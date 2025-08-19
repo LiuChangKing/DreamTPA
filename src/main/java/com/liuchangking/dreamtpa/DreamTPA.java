@@ -4,19 +4,24 @@ import com.liuchangking.dreamtpa.command.TpaCommand;
 import com.liuchangking.dreamtpa.command.TpAcceptCommand;
 import com.liuchangking.dreamtpa.command.TpDenyCommand;
 import com.liuchangking.dreamtpa.listener.RequestListener;
+import com.liuchangking.dreamtpa.listener.TeleportListener;
 import com.liuchangking.dreamtpa.request.TeleportRequest;
 import com.liuchangking.dreamengine.api.DreamServerAPI;
 import com.liuchangking.dreamengine.service.RedisManager;
 import java.util.ArrayDeque;
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Deque;
 import java.util.HashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import java.util.stream.Collectors;
 
 import org.bukkit.Bukkit;
+import org.bukkit.Location;
 import org.bukkit.entity.Player;
 import org.bukkit.plugin.java.JavaPlugin;
 import redis.clients.jedis.Jedis;
@@ -31,6 +36,8 @@ public final class DreamTPA extends JavaPlugin {
 
     private final Map<UUID, TeleportRequest> requestsByRequester = new HashMap<>();
     private final Map<String, Deque<TeleportRequest>> requestsByTarget = new HashMap<>();
+    private final Map<String, Location> pendingTeleports = new HashMap<>();
+    private final Map<String, Set<String>> remoteRequestsByTarget = new HashMap<>();
     private int expireSeconds;
     private JedisPubSub pubSub;
 
@@ -54,6 +61,7 @@ public final class DreamTPA extends JavaPlugin {
         getCommand("tpdeny").setExecutor(new TpDenyCommand(this));
 
         Bukkit.getPluginManager().registerEvents(new RequestListener(this), this);
+        Bukkit.getPluginManager().registerEvents(new TeleportListener(this), this);
     }
 
     @Override
@@ -112,13 +120,47 @@ public final class DreamTPA extends JavaPlugin {
                 requestsByTarget.remove(request.getTargetName().toLowerCase());
             }
         }
+        notifyRequestRemove(request.getTargetName(), request.getRequester().getName());
     }
     public List<String> getRequesters(String targetName) {
         Deque<TeleportRequest> deque = requestsByTarget.get(targetName.toLowerCase());
-        if (deque == null) {
-            return Collections.emptyList();
+        List<String> list = deque == null ? new ArrayList<>() :
+            deque.stream().map(req -> req.getRequester().getName()).collect(Collectors.toCollection(ArrayList::new));
+        Set<String> remote = remoteRequestsByTarget.get(targetName.toLowerCase());
+        if (remote != null) {
+            list.addAll(remote);
         }
-        return deque.stream().map(req -> req.getRequester().getName()).collect(Collectors.toList());
+        return list;
+    }
+
+    public void addPendingTeleport(String playerName, Location location) {
+        pendingTeleports.put(playerName.toLowerCase(), location);
+    }
+
+    public Location pollPendingTeleport(String playerName) {
+        return pendingTeleports.remove(playerName.toLowerCase());
+    }
+
+    public void addRemoteRequest(String target, String requester) {
+        remoteRequestsByTarget.computeIfAbsent(target.toLowerCase(), k -> new LinkedHashSet<>()).add(requester);
+    }
+
+    public void removeRemoteRequest(String target, String requester) {
+        Set<String> set = remoteRequestsByTarget.get(target.toLowerCase());
+        if (set != null) {
+            set.remove(requester);
+            if (set.isEmpty()) {
+                remoteRequestsByTarget.remove(target.toLowerCase());
+            }
+        }
+    }
+
+    public void notifyRequestAdd(String target, String requester) {
+        publish("REQUEST|ADD|" + target + "|" + requester);
+    }
+
+    public void notifyRequestRemove(String target, String requester) {
+        publish("REQUEST|REMOVE|" + target + "|" + requester);
     }
 
     public void sendMessageCrossServer(Player from, String target, String message) {
@@ -200,6 +242,21 @@ public final class DreamTPA extends JavaPlugin {
                 request.getRequester().sendMessage(targetName + " 拒绝了你的传送请求");
                 sendMessageCrossServer(request.getRequester(), targetName,
                     "你拒绝了 " + request.getRequester().getName() + " 的传送请求");
+            }
+        } else if ("REQUEST".equalsIgnoreCase(parts[0])) {
+            if (parts.length < 4) {
+                return;
+            }
+            String action = parts[1];
+            String targetName = parts[2];
+            String requester = parts[3];
+            if ("ADD".equalsIgnoreCase(action)) {
+                Player p = Bukkit.getPlayerExact(targetName);
+                if (p != null) {
+                    addRemoteRequest(targetName, requester);
+                }
+            } else if ("REMOVE".equalsIgnoreCase(action)) {
+                removeRemoteRequest(targetName, requester);
             }
         }
     }
