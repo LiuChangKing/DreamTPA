@@ -67,7 +67,7 @@ public class TpaCommand implements CommandExecutor, TabCompleter {
                 player.getName() + " 请求传送到你这里, 输入 /tpaccept 同意或 /tpdeny 拒绝");
         }
         Bukkit.getScheduler().runTaskLater(plugin, () -> {
-            if (plugin.getRequestByTarget(targetName) == request) {
+            if (plugin.hasRequest(request)) {
                 plugin.removeRequest(request);
                 player.sendMessage("传送请求已过期");
                 if (targetPlayer != null && targetPlayer.isOnline()) {
