@@ -6,40 +6,51 @@ import com.liuchangking.dreamtpa.command.TpDenyCommand;
 import com.liuchangking.dreamtpa.listener.RequestListener;
 import com.liuchangking.dreamtpa.request.TeleportRequest;
 import com.liuchangking.dreamengine.api.DreamServerAPI;
-import com.google.common.io.ByteArrayDataInput;
-import com.google.common.io.ByteArrayDataOutput;
-import com.google.common.io.ByteStreams;
+import com.liuchangking.dreamengine.service.RedisManager;
 import java.util.ArrayDeque;
+import java.util.Collections;
 import java.util.Deque;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.stream.Collectors;
 
 import org.bukkit.Bukkit;
 import org.bukkit.entity.Player;
 import org.bukkit.plugin.java.JavaPlugin;
-import org.bukkit.plugin.messaging.PluginMessageListener;
+import redis.clients.jedis.Jedis;
+import redis.clients.jedis.JedisPubSub;
 
 /**
  * 跨服传送请求的主插件类
  */
-public final class DreamTPA extends JavaPlugin implements PluginMessageListener {
+public final class DreamTPA extends JavaPlugin {
+
+    private static final String REDIS_CHANNEL = "dream:tpa";
 
     private final Map<UUID, TeleportRequest> requestsByRequester = new HashMap<>();
     private final Map<String, Deque<TeleportRequest>> requestsByTarget = new HashMap<>();
     private int expireSeconds;
+    private JedisPubSub pubSub;
 
     @Override
     public void onEnable() {
         saveDefaultConfig();
         this.expireSeconds = getConfig().getInt("request-expire-seconds", 120);
-        Bukkit.getMessenger().registerOutgoingPluginChannel(this, "BungeeCord");
-        Bukkit.getMessenger().registerIncomingPluginChannel(this, "dream:tpa", this);
+        if (!RedisManager.isInitialized()) {
+            getLogger().severe("Redis 未启用，DreamTPA 将停用");
+            Bukkit.getPluginManager().disablePlugin(this);
+            return;
+        }
+        startRedisSubscriber();
 
         TpaCommand tpaCommand = new TpaCommand(this);
         getCommand("dreamtpa").setExecutor(tpaCommand);
         getCommand("dreamtpa").setTabCompleter(tpaCommand);
-        getCommand("tpaccept").setExecutor(new TpAcceptCommand(this));
+        TpAcceptCommand tpAcceptCommand = new TpAcceptCommand(this);
+        getCommand("tpaccept").setExecutor(tpAcceptCommand);
+        getCommand("tpaccept").setTabCompleter(tpAcceptCommand);
         getCommand("tpdeny").setExecutor(new TpDenyCommand(this));
 
         Bukkit.getPluginManager().registerEvents(new RequestListener(this), this);
@@ -47,7 +58,12 @@ public final class DreamTPA extends JavaPlugin implements PluginMessageListener 
 
     @Override
     public void onDisable() {
-        // 插件关闭时的处理逻辑
+        if (pubSub != null) {
+            try {
+                pubSub.unsubscribe();
+            } catch (Exception ignored) {
+            }
+        }
     }
 
     public int getExpireSeconds() {
@@ -97,68 +113,94 @@ public final class DreamTPA extends JavaPlugin implements PluginMessageListener 
             }
         }
     }
+    public List<String> getRequesters(String targetName) {
+        Deque<TeleportRequest> deque = requestsByTarget.get(targetName.toLowerCase());
+        if (deque == null) {
+            return Collections.emptyList();
+        }
+        return deque.stream().map(req -> req.getRequester().getName()).collect(Collectors.toList());
+    }
 
     public void sendMessageCrossServer(Player from, String target, String message) {
-        ByteArrayDataOutput out = ByteStreams.newDataOutput();
-        out.writeUTF("Message");
-        out.writeUTF(target);
-        out.writeUTF(message);
-        from.sendPluginMessage(this, "BungeeCord", out.toByteArray());
+        publish("MESSAGE|" + target + "|" + message);
     }
 
     public void forwardCommand(Player sender, String subChannel, String... extra) {
-        ByteArrayDataOutput out = ByteStreams.newDataOutput();
-        out.writeUTF("Forward");
-        out.writeUTF("ALL");
-        out.writeUTF("dream:tpa");
-        ByteArrayDataOutput msg = ByteStreams.newDataOutput();
-        msg.writeUTF(subChannel);
-        msg.writeUTF(sender.getName());
+        StringBuilder sb = new StringBuilder("COMMAND|")
+            .append(subChannel).append("|").append(sender.getName());
         for (String e : extra) {
-            msg.writeUTF(e);
+            sb.append("|").append(e);
         }
-        out.writeShort(msg.toByteArray().length);
-        out.write(msg.toByteArray());
-        sender.sendPluginMessage(this, "BungeeCord", out.toByteArray());
+        publish(sb.toString());
     }
 
-    @Override
-    public void onPluginMessageReceived(String channel, Player player, byte[] message) {
-        if (!channel.equals("dream:tpa")) {
+    private void startRedisSubscriber() {
+        pubSub = new JedisPubSub() {
+            @Override
+            public void onMessage(String channel, String message) {
+                handleRedisMessage(message);
+            }
+        };
+        Bukkit.getScheduler().runTaskAsynchronously(this, () -> {
+            try (Jedis jedis = RedisManager.getPool().getResource()) {
+                jedis.subscribe(pubSub, REDIS_CHANNEL);
+            }
+        });
+    }
+
+    private void publish(String msg) {
+        try (Jedis jedis = RedisManager.getPool().getResource()) {
+            jedis.publish(REDIS_CHANNEL, msg);
+        }
+    }
+
+    private void handleRedisMessage(String message) {
+        String[] parts = message.split("\\|");
+        if (parts.length < 1) {
             return;
         }
-        ByteArrayDataInput in = ByteStreams.newDataInput(message);
-        String sub = in.readUTF();
-        String targetName = in.readUTF();
-        String requesterName = null;
-        try {
-            requesterName = in.readUTF();
-        } catch (Exception ignored) {
-        }
-        if ("TpAccept".equalsIgnoreCase(sub)) {
-            TeleportRequest request = requesterName == null
-                ? getRequestByTarget(targetName)
-                : getRequestByTarget(targetName, requesterName);
-            if (request == null) {
+        if ("MESSAGE".equalsIgnoreCase(parts[0])) {
+            if (parts.length < 3) {
                 return;
             }
-            removeRequest(request);
-            String targetServerId = DreamServerAPI.getPlayerServerId(targetName);
-            DreamServerAPI.sendPlayerToServer(request.getRequester(), targetServerId);
-            request.getRequester().sendMessage("正在传送到 " + targetName);
-            sendMessageCrossServer(request.getRequester(), targetName,
-                "你接受了 " + request.getRequester().getName() + " 的传送请求");
-        } else if ("TpDeny".equalsIgnoreCase(sub)) {
-            TeleportRequest request = requesterName == null
-                ? getRequestByTarget(targetName)
-                : getRequestByTarget(targetName, requesterName);
-            if (request == null) {
+            String target = parts[1];
+            String msg = parts[2];
+            Player p = Bukkit.getPlayerExact(target);
+            if (p != null) {
+                p.sendMessage(msg);
+            }
+        } else if ("COMMAND".equalsIgnoreCase(parts[0])) {
+            if (parts.length < 3) {
                 return;
             }
-            removeRequest(request);
-            request.getRequester().sendMessage(targetName + " 拒绝了你的传送请求");
-            sendMessageCrossServer(request.getRequester(), targetName,
-                "你拒绝了 " + request.getRequester().getName() + " 的传送请求");
+            String sub = parts[1];
+            String targetName = parts[2];
+            String requesterName = parts.length > 3 ? parts[3] : null;
+            if ("TpAccept".equalsIgnoreCase(sub)) {
+                TeleportRequest request = requesterName == null
+                    ? getRequestByTarget(targetName)
+                    : getRequestByTarget(targetName, requesterName);
+                if (request == null) {
+                    return;
+                }
+                removeRequest(request);
+                String targetServerId = DreamServerAPI.getPlayerServerId(targetName);
+                DreamServerAPI.sendPlayerToServer(request.getRequester(), targetServerId);
+                request.getRequester().sendMessage("正在传送到 " + targetName);
+                sendMessageCrossServer(request.getRequester(), targetName,
+                    "你接受了 " + request.getRequester().getName() + " 的传送请求");
+            } else if ("TpDeny".equalsIgnoreCase(sub)) {
+                TeleportRequest request = requesterName == null
+                    ? getRequestByTarget(targetName)
+                    : getRequestByTarget(targetName, requesterName);
+                if (request == null) {
+                    return;
+                }
+                removeRequest(request);
+                request.getRequester().sendMessage(targetName + " 拒绝了你的传送请求");
+                sendMessageCrossServer(request.getRequester(), targetName,
+                    "你拒绝了 " + request.getRequester().getName() + " 的传送请求");
+            }
         }
     }
 }
