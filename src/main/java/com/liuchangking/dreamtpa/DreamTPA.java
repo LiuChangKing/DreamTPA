@@ -9,6 +9,8 @@ import com.liuchangking.dreamengine.api.DreamServerAPI;
 import com.google.common.io.ByteArrayDataInput;
 import com.google.common.io.ByteArrayDataOutput;
 import com.google.common.io.ByteStreams;
+import java.util.ArrayDeque;
+import java.util.Deque;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.UUID;
@@ -24,7 +26,7 @@ import org.bukkit.plugin.messaging.PluginMessageListener;
 public final class DreamTPA extends JavaPlugin implements PluginMessageListener {
 
     private final Map<UUID, TeleportRequest> requestsByRequester = new HashMap<>();
-    private final Map<String, TeleportRequest> requestsByTarget = new HashMap<>();
+    private final Map<String, Deque<TeleportRequest>> requestsByTarget = new HashMap<>();
     private int expireSeconds;
 
     @Override
@@ -54,7 +56,8 @@ public final class DreamTPA extends JavaPlugin implements PluginMessageListener 
 
     public void addRequest(TeleportRequest request) {
         requestsByRequester.put(request.getRequester().getUniqueId(), request);
-        requestsByTarget.put(request.getTargetName().toLowerCase(), request);
+        requestsByTarget.computeIfAbsent(request.getTargetName().toLowerCase(), k -> new ArrayDeque<>())
+            .addLast(request);
     }
 
     public TeleportRequest getRequestByRequester(UUID uuid) {
@@ -62,12 +65,37 @@ public final class DreamTPA extends JavaPlugin implements PluginMessageListener 
     }
 
     public TeleportRequest getRequestByTarget(String name) {
-        return requestsByTarget.get(name.toLowerCase());
+        Deque<TeleportRequest> deque = requestsByTarget.get(name.toLowerCase());
+        return deque == null ? null : deque.peekLast();
+    }
+
+    public TeleportRequest getRequestByTarget(String targetName, String requesterName) {
+        Deque<TeleportRequest> deque = requestsByTarget.get(targetName.toLowerCase());
+        if (deque == null) {
+            return null;
+        }
+        for (TeleportRequest req : deque) {
+            if (req.getRequester().getName().equalsIgnoreCase(requesterName)) {
+                return req;
+            }
+        }
+        return null;
+    }
+
+    public boolean hasRequest(TeleportRequest request) {
+        Deque<TeleportRequest> deque = requestsByTarget.get(request.getTargetName().toLowerCase());
+        return deque != null && deque.contains(request);
     }
 
     public void removeRequest(TeleportRequest request) {
         requestsByRequester.remove(request.getRequester().getUniqueId());
-        requestsByTarget.remove(request.getTargetName().toLowerCase());
+        Deque<TeleportRequest> deque = requestsByTarget.get(request.getTargetName().toLowerCase());
+        if (deque != null) {
+            deque.remove(request);
+            if (deque.isEmpty()) {
+                requestsByTarget.remove(request.getTargetName().toLowerCase());
+            }
+        }
     }
 
     public void sendMessageCrossServer(Player from, String target, String message) {
@@ -78,7 +106,7 @@ public final class DreamTPA extends JavaPlugin implements PluginMessageListener 
         from.sendPluginMessage(this, "BungeeCord", out.toByteArray());
     }
 
-    public void forwardCommand(Player sender, String subChannel) {
+    public void forwardCommand(Player sender, String subChannel, String... extra) {
         ByteArrayDataOutput out = ByteStreams.newDataOutput();
         out.writeUTF("Forward");
         out.writeUTF("ALL");
@@ -86,6 +114,9 @@ public final class DreamTPA extends JavaPlugin implements PluginMessageListener 
         ByteArrayDataOutput msg = ByteStreams.newDataOutput();
         msg.writeUTF(subChannel);
         msg.writeUTF(sender.getName());
+        for (String e : extra) {
+            msg.writeUTF(e);
+        }
         out.writeShort(msg.toByteArray().length);
         out.write(msg.toByteArray());
         sender.sendPluginMessage(this, "BungeeCord", out.toByteArray());
@@ -99,8 +130,15 @@ public final class DreamTPA extends JavaPlugin implements PluginMessageListener 
         ByteArrayDataInput in = ByteStreams.newDataInput(message);
         String sub = in.readUTF();
         String targetName = in.readUTF();
+        String requesterName = null;
+        try {
+            requesterName = in.readUTF();
+        } catch (Exception ignored) {
+        }
         if ("TpAccept".equalsIgnoreCase(sub)) {
-            TeleportRequest request = getRequestByTarget(targetName);
+            TeleportRequest request = requesterName == null
+                ? getRequestByTarget(targetName)
+                : getRequestByTarget(targetName, requesterName);
             if (request == null) {
                 return;
             }
@@ -111,7 +149,9 @@ public final class DreamTPA extends JavaPlugin implements PluginMessageListener 
             sendMessageCrossServer(request.getRequester(), targetName,
                 "你接受了 " + request.getRequester().getName() + " 的传送请求");
         } else if ("TpDeny".equalsIgnoreCase(sub)) {
-            TeleportRequest request = getRequestByTarget(targetName);
+            TeleportRequest request = requesterName == null
+                ? getRequestByTarget(targetName)
+                : getRequestByTarget(targetName, requesterName);
             if (request == null) {
                 return;
             }

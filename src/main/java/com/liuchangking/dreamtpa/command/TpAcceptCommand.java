@@ -26,10 +26,20 @@ public class TpAcceptCommand implements CommandExecutor {
             return true;
         }
         Player target = (Player) sender;
-        TeleportRequest request = plugin.getRequestByTarget(target.getName());
-        if (request == null) {
-            plugin.forwardCommand(target, "TpAccept");
-            return true;
+        TeleportRequest request;
+        if (args.length >= 1) {
+            String requesterName = args[0];
+            request = plugin.getRequestByTarget(target.getName(), requesterName);
+            if (request == null) {
+                plugin.forwardCommand(target, "TpAccept", requesterName);
+                return true;
+            }
+        } else {
+            request = plugin.getRequestByTarget(target.getName());
+            if (request == null) {
+                plugin.forwardCommand(target, "TpAccept");
+                return true;
+            }
         }
         plugin.removeRequest(request);
         String targetServerId = DreamServerAPI.getPlayerServerId(target.getName());
