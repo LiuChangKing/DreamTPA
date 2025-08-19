@@ -27,7 +27,7 @@ public class TpDenyCommand implements CommandExecutor {
         Player target = (Player) sender;
         TeleportRequest request = plugin.getRequestByTarget(target.getName());
         if (request == null) {
-            target.sendMessage("没有待处理的传送请求");
+            plugin.forwardCommand(target, "TpDeny");
             return true;
         }
         plugin.removeRequest(request);
