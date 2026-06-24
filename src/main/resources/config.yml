@@ -1,2 +1,7 @@
-# 传送请求的有效时间(秒)
+# Enable cross-server mode.
+# true: use DreamEngine Redis / DreamServerAPI for cross-server TPA.
+# false: only handle TPA on the current server and do not require Redis.
+cross-server-mode: true
+
+# Teleport request expiration time, in seconds.
 request-expire-seconds: 120

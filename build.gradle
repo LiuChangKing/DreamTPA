@@ -19,6 +19,7 @@ repositories {
 
 dependencies {
     compileOnly 'org.spigotmc:spigot-api:1.18.2-R0.1-SNAPSHOT'
+    compileOnly files("../DreamEngine/build/libs/DreamEngine-1.0-SNAPSHOT.jar")
     compileOnly fileTree(dir: 'libs', include: ['*.jar'])
 }
 

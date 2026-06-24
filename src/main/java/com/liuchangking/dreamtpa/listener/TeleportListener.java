@@ -8,9 +8,6 @@ import org.bukkit.event.EventHandler;
 import org.bukkit.event.Listener;
 import org.bukkit.event.player.PlayerJoinEvent;
 
-/**
- * 处理跨服传送后的定位
- */
 public class TeleportListener implements Listener {
 
     private final DreamTPA plugin;
@@ -21,8 +18,14 @@ public class TeleportListener implements Listener {
 
     @EventHandler
     public void onPlayerJoin(PlayerJoinEvent event) {
+        if (!plugin.isCrossServerMode()) {
+            return;
+        }
         Player player = event.getPlayer();
-        Location loc = plugin.pollPendingTeleport(player.getName());
+        if (plugin.wasFastConsumed(player.getUniqueId())) {
+            return;
+        }
+        Location loc = plugin.pollPendingTeleport(player.getUniqueId());
         if (loc != null) {
             Bukkit.getScheduler().runTask(plugin, () -> player.teleport(loc));
         }

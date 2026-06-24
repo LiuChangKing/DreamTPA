@@ -1,16 +1,17 @@
 package com.liuchangking.dreamtpa.command;
 
+import com.liuchangking.dreamengine.utils.MessageUtil;
 import com.liuchangking.dreamtpa.DreamTPA;
-import com.liuchangking.dreamtpa.request.TeleportRequest;
+import java.util.Collections;
+import java.util.List;
+import java.util.stream.Collectors;
 import org.bukkit.command.Command;
 import org.bukkit.command.CommandExecutor;
 import org.bukkit.command.CommandSender;
+import org.bukkit.command.TabCompleter;
 import org.bukkit.entity.Player;
 
-/**
- * 处理拒绝传送请求的命令
- */
-public class TpDenyCommand implements CommandExecutor {
+public class TpDenyCommand implements CommandExecutor, TabCompleter {
 
     private final DreamTPA plugin;
 
@@ -20,19 +21,22 @@ public class TpDenyCommand implements CommandExecutor {
 
     @Override
     public boolean onCommand(CommandSender sender, Command command, String label, String[] args) {
-        if (!(sender instanceof Player)) {
-            sender.sendMessage("只有玩家可以使用该命令");
+        if (!(sender instanceof Player target)) {
+            MessageUtil.sendWrongMsg(sender, "只有玩家可以使用该命令");
             return true;
         }
-        Player target = (Player) sender;
-        TeleportRequest request = plugin.getRequestByTarget(target.getName());
-        if (request == null) {
-            plugin.forwardCommand(target, "TpDeny");
-            return true;
-        }
-        plugin.removeRequest(request);
-        target.sendMessage("你拒绝了 " + request.getRequester().getName() + " 的传送请求");
-        request.getRequester().sendMessage(target.getName() + " 拒绝了你的传送请求");
+        plugin.denyRequest(target, args.length >= 1 ? args[0] : null);
         return true;
+    }
+
+    @Override
+    public List<String> onTabComplete(CommandSender sender, Command command, String alias, String[] args) {
+        if (args.length == 1 && sender instanceof Player player) {
+            String prefix = args[0].toLowerCase();
+            return plugin.getRequesters(player.getUniqueId()).stream()
+                    .filter(name -> name.toLowerCase().startsWith(prefix))
+                    .collect(Collectors.toList());
+        }
+        return Collections.emptyList();
     }
 }
