@@ -29,6 +29,7 @@ import org.bukkit.Bukkit;
 import org.bukkit.Location;
 import org.bukkit.configuration.file.YamlConfiguration;
 import org.bukkit.entity.Player;
+import org.bukkit.plugin.Plugin;
 import org.bukkit.plugin.java.JavaPlugin;
 import redis.clients.jedis.Jedis;
 import redis.clients.jedis.JedisPubSub;
@@ -40,6 +41,7 @@ public final class DreamTPA extends JavaPlugin {
 
     private static final String REDIS_CHANNEL = "dream:tpa";
     private static final long FAST_CONSUMED_TTL_MS = 10_000L;
+    private static final long DREAM_RTP_BYPASS_TTL_MS = 120_000L;
     private static final String CONFIG_TABLE = "dreamtpa_config";
     private static final String CONFIG_KEY = "config.yml";
 
@@ -160,6 +162,10 @@ public final class DreamTPA extends JavaPlugin {
             MessageUtil.notifyError(requester, "无法申请", "你不能向自己发送传送请求");
             return false;
         }
+        if (!canAccessStpServer(requester, target.serverId())) {
+            MessageUtil.notifyError(requester, stpNoPermissionMessage(target.serverId()));
+            return false;
+        }
 
         TeleportRequest previous = getRequestByRequester(requester.getUniqueId());
         if (previous != null) {
@@ -189,6 +195,7 @@ public final class DreamTPA extends JavaPlugin {
                 : getRequestByTarget(target.getUniqueId(), requesterInput);
         if (request != null) {
             removeRequest(request);
+            markDreamRtpBypass(request.getRequesterUuid());
             request.getRequester().teleport(target);
             MessageUtil.notifyInfo(request.getRequester(), "正在传送", "正在传送到 " + target.getName());
             MessageUtil.notifySuccess(target, "已接受", "你接受了 " + request.getRequesterName() + " 的传送请求");
@@ -369,6 +376,7 @@ public final class DreamTPA extends JavaPlugin {
 
     public void addPendingTeleport(UUID playerUuid, Location location) {
         if (crossServerMode) {
+            markDreamRtpBypass(playerUuid);
             pendingTeleports.put(playerUuid, location);
         }
     }
@@ -506,6 +514,21 @@ public final class DreamTPA extends JavaPlugin {
         }
     }
 
+    private void markDreamRtpBypass(UUID playerUuid) {
+        if (playerUuid == null) {
+            return;
+        }
+        try {
+            Class<?> dreamRtpClass = Class.forName("com.liuchangking.dreamrtp.DreamRTP");
+            dreamRtpClass.getMethod("skipNextNewPlayerRtp", UUID.class, long.class)
+                    .invoke(null, playerUuid, DREAM_RTP_BYPASS_TTL_MS);
+        } catch (ClassNotFoundException ignored) {
+            // DreamRTP is optional for DreamTPA.
+        } catch (ReflectiveOperationException | LinkageError ex) {
+            getLogger().warning("无法通知 DreamRTP 跳过本次 TPA 新手随机传送: " + ex.getMessage());
+        }
+    }
+
     private void handleRedisMessage(String message) {
         String[] parts = message.split("\\|", 6);
         if (parts.length < 1) {
@@ -558,10 +581,16 @@ public final class DreamTPA extends JavaPlugin {
             }
 
             if ("TpAccept".equalsIgnoreCase(sub)) {
-                removeRequest(request);
                 String targetServerId = DreamServerAPI.getPlayerServerId(request.getTargetUuid());
                 if (targetServerId == null || targetServerId.isEmpty()) {
                     targetServerId = request.getTargetServerId();
+                }
+                removeRequest(request);
+                if (!canAccessStpServer(request.getRequester(), targetServerId)) {
+                    MessageUtil.notifyError(request.getRequester(), stpNoPermissionMessage(targetServerId));
+                    sendMessageCrossServer(request.getTargetUuid(), request.getTargetName(),
+                            request.getRequesterName() + " 没有权限进入你所在服务器，传送已取消");
+                    return;
                 }
                 DreamServerAPI.sendPlayerToServer(request.getRequester(), targetServerId);
                 MessageUtil.notifyInfo(request.getRequester(), "正在传送", "正在传送到 " + request.getTargetName());
@@ -601,10 +630,14 @@ public final class DreamTPA extends JavaPlugin {
             return;
         }
         if ("TpAccept".equalsIgnoreCase(sub)) {
-            removeRequest(request);
             String targetServerId = DreamServerAPI.getPlayerServerId(request.getTargetUuid());
             if (targetServerId == null || targetServerId.isEmpty()) {
                 targetServerId = request.getTargetServerId();
+            }
+            removeRequest(request);
+            if (!canAccessStpServer(request.getRequester(), targetServerId)) {
+                MessageUtil.notifyError(request.getRequester(), stpNoPermissionMessage(targetServerId));
+                return;
             }
             DreamServerAPI.sendPlayerToServer(request.getRequester(), targetServerId);
             MessageUtil.notifyInfo(request.getRequester(), "正在传送", "正在传送到 " + request.getTargetName());
@@ -659,6 +692,45 @@ public final class DreamTPA extends JavaPlugin {
             return UUID.fromString(value);
         } catch (IllegalArgumentException ignored) {
             return null;
+        }
+    }
+
+    private boolean canAccessStpServer(Player player, String serverId) {
+        if (serverId == null || serverId.isEmpty()) {
+            return true;
+        }
+        String currentServerId = DreamServerAPI.getServerId();
+        if (currentServerId != null && currentServerId.equalsIgnoreCase(serverId)) {
+            return true;
+        }
+        Plugin stp = Bukkit.getPluginManager().getPlugin("STP");
+        if (stp == null || !stp.isEnabled()) {
+            return true;
+        }
+        try {
+            Object result = stp.getClass()
+                    .getMethod("canPlayerAccessServer", Player.class, String.class)
+                    .invoke(stp, player, serverId);
+            return Boolean.TRUE.equals(result);
+        } catch (ReflectiveOperationException | LinkageError ex) {
+            getLogger().warning("无法调用 STP 校验服务器权限，已阻止本次跨服 TPA: " + ex.getMessage());
+            return false;
+        }
+    }
+
+    private String stpNoPermissionMessage(String serverId) {
+        Plugin stp = Bukkit.getPluginManager().getPlugin("STP");
+        if (stp == null || !stp.isEnabled()) {
+            return "没有权限传送到该服务器.";
+        }
+        try {
+            Object result = stp.getClass()
+                    .getMethod("getServerNoPermissionMessage", String.class)
+                    .invoke(stp, serverId);
+            String message = result == null ? null : result.toString();
+            return message == null || message.isEmpty() ? "没有权限传送到该服务器." : message;
+        } catch (ReflectiveOperationException | LinkageError ex) {
+            return "没有权限传送到该服务器.";
         }
     }
 
